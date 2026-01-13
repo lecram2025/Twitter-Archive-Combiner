@@ -39,8 +39,14 @@ If you've downloaded your X / Twitter data multiple times over the years, this t
 
 ## Quick Start
 
+Download the Zipfile from this page
+
+Install Python if you don't have it
+
+Run in the terminal:
+
 ```bash
-python twitter_archive_merger.py
+python twitter_archive_gui.py
 ```
 
 Then use the GUI to select your archive folders and merge them.
