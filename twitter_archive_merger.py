@@ -48,23 +48,6 @@ class TwitterArchiveAnalyzer:
         self.manifest_data = json.loads(match.group(1))
         return self.manifest_data
 
-    def get_archive_info(self):
-        """Get basic info about this archive"""
-        if not self.manifest_data:
-            self.load_manifest()
-
-        user_info = self.manifest_data.get('userInfo', {})
-        archive_info = self.manifest_data.get('archiveInfo', {})
-
-        return {
-            'username': user_info.get('userName', 'unknown'),
-            'display_name': user_info.get('displayName', 'unknown'),
-            'account_id': user_info.get('accountId', 'unknown'),
-            'generation_date': archive_info.get('generationDate', 'unknown'),
-            'size_bytes': int(archive_info.get('sizeBytes', 0)),
-            'is_partial': archive_info.get('isPartialArchive', True),
-        }
-
     def analyze_data_types(self):
         """Analyze what data types exist and their counts"""
         if not self.manifest_data:
@@ -86,26 +69,126 @@ class TwitterArchiveAnalyzer:
         return analysis
 
     @staticmethod
-    def is_valid_archive(archive_path):
-        """Check if a path contains a valid Twitter archive"""
+    def is_legacy_archive(archive_path):
+        """Check if a path contains a legacy (pre-2019) Twitter archive"""
         archive_path = Path(archive_path)
-        
-        # Check for required files/folders
+
+        # Legacy archives have tweet_index.js and data/js/tweets/ folder
+        legacy_indicators = [
+            archive_path / "data" / "js" / "tweet_index.js",
+            archive_path / "data" / "js" / "tweets",
+        ]
+
+        return all(item.exists() for item in legacy_indicators)
+
+    @staticmethod
+    def is_valid_archive(archive_path):
+        """Check if a path contains a valid Twitter archive (modern or legacy)"""
+        archive_path = Path(archive_path)
+
+        # Check for legacy format first
+        if TwitterArchiveAnalyzer.is_legacy_archive(archive_path):
+            return True
+
+        # Check for modern format - required files/folders
         required_items = [
             archive_path / "data",
             archive_path / "Your archive.html"
         ]
-        
+
         # Check for manifest in possible locations
         manifest_paths = [
             archive_path / "data" / "manifest.js",
             archive_path / "manifest.js",
         ]
-        
+
         has_manifest = any(path.exists() for path in manifest_paths)
         has_required = all(item.exists() for item in required_items)
-        
+
         return has_manifest and has_required
+
+    def load_legacy_archive(self):
+        """Load data from a legacy (pre-2019) Twitter archive"""
+        tweet_index_path = self.archive_path / "data" / "js" / "tweet_index.js"
+        user_details_path = self.archive_path / "data" / "js" / "user_details.js"
+
+        # Load tweet index
+        with open(tweet_index_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Parse: var tweet_index = [...]
+        match = re.search(r'var\s+tweet_index\s*=\s*(\[.*\])', content, re.DOTALL)
+        if not match:
+            raise ValueError("Could not parse tweet_index.js")
+
+        tweet_index = json.loads(match.group(1))
+
+        # Load user details
+        user_info = {}
+        if user_details_path.exists():
+            with open(user_details_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            match = re.search(r'var\s+user_details\s*=\s*({.*})', content, re.DOTALL)
+            if match:
+                user_info = json.loads(match.group(1))
+
+        # Calculate total tweets and estimate date from tweet_index
+        total_tweets = sum(item.get('tweet_count', 0) for item in tweet_index)
+
+        # Get the latest month from tweet_index for generation date
+        if tweet_index:
+            latest = max(tweet_index, key=lambda x: (x.get('year', 0), x.get('month', 0)))
+            gen_date = f"{latest['year']}-{latest['month']:02d}-01T00:00:00.000Z"
+        else:
+            gen_date = "2018-01-01T00:00:00.000Z"
+
+        # Create a synthetic manifest for compatibility
+        self.manifest_data = {
+            'userInfo': {
+                'accountId': user_info.get('id', 'unknown'),
+                'userName': user_info.get('screen_name', 'unknown'),
+                'displayName': user_info.get('full_name', 'unknown'),
+            },
+            'archiveInfo': {
+                'sizeBytes': '0',
+                'generationDate': gen_date,
+                'isPartialArchive': False,
+            },
+            'dataTypes': {
+                'tweets': {
+                    'files': [{'fileName': f, 'count': str(c)}
+                              for f, c in [(item['file_name'], item['tweet_count'])
+                                          for item in tweet_index]]
+                }
+            },
+            '_isLegacy': True,
+            '_tweetIndex': tweet_index,
+        }
+
+        return self.manifest_data
+
+    def get_archive_info(self):
+        """Get basic info about this archive"""
+        # Check if legacy archive
+        if TwitterArchiveAnalyzer.is_legacy_archive(self.archive_path):
+            if not self.manifest_data:
+                self.load_legacy_archive()
+        else:
+            if not self.manifest_data:
+                self.load_manifest()
+
+        user_info = self.manifest_data.get('userInfo', {})
+        archive_info = self.manifest_data.get('archiveInfo', {})
+
+        return {
+            'username': user_info.get('userName', 'unknown'),
+            'display_name': user_info.get('displayName', 'unknown'),
+            'account_id': user_info.get('accountId', 'unknown'),
+            'generation_date': archive_info.get('generationDate', 'unknown'),
+            'size_bytes': int(archive_info.get('sizeBytes', 0)),
+            'is_partial': archive_info.get('isPartialArchive', True),
+            'is_legacy': self.manifest_data.get('_isLegacy', False),
+        }
 
 
 class TwitterArchiveMerger:
@@ -117,15 +200,83 @@ class TwitterArchiveMerger:
         self.merged_data = defaultdict(list)
         self.progress_callback = progress_callback or (lambda x: None)
 
+    def normalize_tweet(self, tweet_wrapper):
+        """
+        Ensure a tweet has all required fields for viewer compatibility.
+        Works with both legacy-converted and modern tweets.
+        Older viewers (2022 and earlier) expect certain fields to exist.
+        """
+        if 'tweet' not in tweet_wrapper:
+            return tweet_wrapper
+
+        tweet = tweet_wrapper['tweet']
+        tweet_id = tweet.get('id_str', tweet.get('id', '0'))
+        full_text = tweet.get('full_text', '')
+
+        # Add edit_info if missing (required by some viewers)
+        if 'edit_info' not in tweet:
+            tweet['edit_info'] = {
+                'initial': {
+                    'editTweetIds': [tweet_id],
+                    'editableUntil': '1970-01-01T00:00:00.000Z',
+                    'isEditEligible': False
+                }
+            }
+
+        # Add display_text_range if missing
+        if 'display_text_range' not in tweet:
+            tweet['display_text_range'] = ['0', str(len(full_text))]
+
+        # Add boolean flags with defaults if missing
+        if 'retweeted' not in tweet:
+            tweet['retweeted'] = False
+        if 'truncated' not in tweet:
+            tweet['truncated'] = False
+        if 'possibly_sensitive' not in tweet:
+            tweet['possibly_sensitive'] = False
+
+        # Ensure favorited exists
+        if 'favorited' not in tweet:
+            tweet['favorited'] = False
+
+        # Ensure entities exists
+        if 'entities' not in tweet:
+            tweet['entities'] = {
+                'hashtags': [],
+                'symbols': [],
+                'user_mentions': [],
+                'urls': []
+            }
+
+        # Ensure lang exists
+        if 'lang' not in tweet:
+            tweet['lang'] = 'en'
+
+        return tweet_wrapper
+
     def log_progress(self, message):
         """Log progress message"""
         self.progress_callback(message)
 
     def add_archive(self, archive_path):
-        """Add an archive to be merged"""
+        """Add an archive to be merged (supports both modern and legacy formats)"""
         archive_path = Path(archive_path)
 
-        # Find manifest
+        # Check if this is a legacy archive
+        if TwitterArchiveAnalyzer.is_legacy_archive(archive_path):
+            analyzer = TwitterArchiveAnalyzer(archive_path)
+            manifest_data = analyzer.load_legacy_archive()
+
+            self.source_archives.append({
+                'path': archive_path,
+                'manifest': manifest_data,
+                'is_legacy': True
+            })
+
+            self.log_progress(f"✅ Added legacy archive: {archive_path.name}")
+            return manifest_data
+
+        # Modern format - find manifest
         possible_paths = [
             archive_path / "data" / "manifest.js",
             archive_path / "manifest.js",
@@ -151,7 +302,8 @@ class TwitterArchiveMerger:
 
         self.source_archives.append({
             'path': archive_path,
-            'manifest': manifest_data
+            'manifest': manifest_data,
+            'is_legacy': False
         })
 
         self.log_progress(f"✅ Added archive: {archive_path.name}")
@@ -174,6 +326,79 @@ class TwitterArchiveMerger:
             return data if isinstance(data, list) else []
         except json.JSONDecodeError:
             return []
+
+    def load_legacy_tweets(self, archive_path, tweet_index):
+        """Load tweets from a legacy archive and convert to modern format"""
+        all_tweets = []
+
+        for item in tweet_index:
+            file_path = archive_path / item['file_name']
+            if not file_path.exists():
+                continue
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Legacy format: Grailbird.data.tweets_YYYY_MM = [...]
+            match = re.search(r'Grailbird\.data\.[^=]+=\s*(\[.*\])', content, re.DOTALL)
+            if not match:
+                continue
+
+            try:
+                tweets = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+
+            # Convert each tweet to modern format
+            for old_tweet in tweets:
+                new_tweet = self.convert_legacy_tweet(old_tweet)
+                all_tweets.append(new_tweet)
+
+        return all_tweets
+
+    def convert_legacy_tweet(self, old_tweet):
+        """Convert a legacy tweet format to modern format"""
+        # The modern format wraps tweets in {"tweet": {...}}
+        # and uses slightly different field names
+
+        # Parse the old created_at format: "2018-05-23 18:45:05 +0000"
+        created_at = old_tweet.get('created_at', '')
+        try:
+            dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S %z")
+            # Convert to modern format: "Wed May 23 18:45:05 +0000 2018"
+            modern_created_at = dt.strftime("%a %b %d %H:%M:%S %z %Y")
+        except ValueError:
+            modern_created_at = created_at
+
+        # Build the modern tweet structure
+        modern_tweet = {
+            'tweet': {
+                'id_str': old_tweet.get('id_str', str(old_tweet.get('id', ''))),
+                'id': str(old_tweet.get('id', '')),
+                'full_text': old_tweet.get('text', ''),
+                'created_at': modern_created_at,
+                'source': old_tweet.get('source', ''),
+                'entities': old_tweet.get('entities', {}),
+                'favorite_count': str(old_tweet.get('favorite_count', 0)),
+                'retweet_count': str(old_tweet.get('retweet_count', 0)),
+            }
+        }
+
+        # Handle reply fields
+        if old_tweet.get('in_reply_to_status_id_str'):
+            modern_tweet['tweet']['in_reply_to_status_id_str'] = old_tweet['in_reply_to_status_id_str']
+            modern_tweet['tweet']['in_reply_to_status_id'] = old_tweet.get('in_reply_to_status_id', '')
+        if old_tweet.get('in_reply_to_user_id_str'):
+            modern_tweet['tweet']['in_reply_to_user_id_str'] = old_tweet['in_reply_to_user_id_str']
+            modern_tweet['tweet']['in_reply_to_user_id'] = old_tweet.get('in_reply_to_user_id', '')
+        if old_tweet.get('in_reply_to_screen_name'):
+            modern_tweet['tweet']['in_reply_to_screen_name'] = old_tweet['in_reply_to_screen_name']
+
+        # Handle retweet
+        if old_tweet.get('retweeted_status'):
+            modern_tweet['tweet']['retweeted'] = True
+
+        return modern_tweet
 
     def merge_data_files(self):
         """Merge all data files from all archives"""
@@ -202,7 +427,19 @@ class TwitterArchiveMerger:
             combined_data = []
 
             for archive in self.source_archives:
-                # Check both the normalized name and any original names that map to it
+                # Handle legacy archives specially for tweets
+                if archive.get('is_legacy') and data_type == 'tweets':
+                    tweet_index = archive['manifest'].get('_tweetIndex', [])
+                    legacy_tweets = self.load_legacy_tweets(archive['path'], tweet_index)
+                    combined_data.extend(legacy_tweets)
+                    self.log_progress(f"   📜 Loaded {len(legacy_tweets)} tweets from legacy archive")
+                    continue
+
+                # Skip non-tweet data types for legacy archives (they only have tweets)
+                if archive.get('is_legacy'):
+                    continue
+
+                # Modern format - check both the normalized name and any original names that map to it
                 possible_names = [data_type]
                 for old_name, new_name in field_mappings.items():
                     if new_name == data_type:
@@ -332,6 +569,13 @@ class TwitterArchiveMerger:
         data_dir = self.output_path / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
+        # Normalize tweets for viewer compatibility before writing
+        if 'tweets' in self.merged_data:
+            self.log_progress("   🔧 Normalizing tweets for viewer compatibility...")
+            self.merged_data['tweets'] = [
+                self.normalize_tweet(tweet) for tweet in self.merged_data['tweets']
+            ]
+
         # Write data files
         for data_type, data_list in self.merged_data.items():
             filename = data_type.replace('_', '-') + '.js'
@@ -349,10 +593,21 @@ class TwitterArchiveMerger:
             file_path = data_dir / filename
             global_name = f"YTD.{data_type.replace('-', '_')}.part0"
 
+            # Use pretty-printed JSON for better compatibility with older viewers
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(f"window.{global_name} = ")
-                json.dump(data_list, f, ensure_ascii=False, separators=(',', ':'))
+                json.dump(data_list, f, ensure_ascii=False, indent=2)
                 f.write(';')
+
+            # For tweets, also write in old format (tweet.js) for 2022 and earlier viewers
+            if data_type == 'tweets':
+                old_file_path = data_dir / 'tweet.js'
+                old_global_name = 'YTD.tweet.part0'
+                self.log_progress("   📝 Writing tweet.js (old format) for older viewer compatibility")
+                with open(old_file_path, 'w', encoding='utf-8') as f:
+                    f.write(f"window.{old_global_name} = ")
+                    json.dump(data_list, f, ensure_ascii=False, indent=2)
+                    f.write(';')
 
         # Generate manifest
         self.log_progress("📋 Generating manifest...")
@@ -399,10 +654,30 @@ class TwitterArchiveMerger:
                 data_types[data_type]["mediaDirectory"] = "data/profile_media"
                 self.log_progress(f"   ✅ Added profile media directory")
 
-        # Add tweetsMedia entry
+        # Add old format "tweet" entry for 2022 and earlier viewers
+        if 'tweets' in self.merged_data:
+            tweets_count = len(self.merged_data['tweets'])
+            data_types['tweet'] = {
+                "files": [{
+                    "fileName": "data/tweet.js",
+                    "globalName": "YTD.tweet.part0",
+                    "count": str(tweets_count)
+                }]
+            }
+            # Add media directory to old format entry too
+            if (self.output_path / 'data/tweets_media').exists():
+                data_types['tweet']["mediaDirectory"] = "data/tweets_media"
+            self.log_progress(f"   ✅ Added 'tweet' entry (old format) for older viewer compatibility")
+
+        # Add tweetsMedia entry (new format)
         if (self.output_path / 'data/tweets_media').exists():
             data_types['tweetsMedia'] = {"mediaDirectory": "data/tweets_media"}
             self.log_progress(f"   ✅ Added tweetsMedia entry")
+
+        # Add tweetMedia entry (old format) for 2022 and earlier viewers
+        if (self.output_path / 'data/tweets_media').exists():
+            data_types['tweetMedia'] = {"mediaDirectory": "data/tweets_media"}
+            self.log_progress(f"   ✅ Added tweetMedia entry (old format)")
 
         # Add profileMedia entry
         if (self.output_path / 'data/profile_media').exists():

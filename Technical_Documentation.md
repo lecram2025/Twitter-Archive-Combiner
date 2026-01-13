@@ -36,6 +36,9 @@ TwitterArchiveMerger
 ### 2. Data Merging Algorithm
 ```python
 # Pseudo-code for data merging
+# First, sort archives by generation date (oldest first)
+source_archives.sort(key=lambda x: x.generation_date)
+
 for each_data_type in all_archives:
     merged_data[data_type] = []
     for archive in source_archives:
@@ -44,27 +47,39 @@ for each_data_type in all_archives:
 ```
 
 Key features:
-- **Field normalization**: Maps `tweet` → `tweets` for consistency
-- **Chronological ordering**: Preserves temporal relationships
-- **Memory efficient**: Streams large datasets without loading everything into RAM
+- **Date-based ordering**: Archives are sorted by generation date before merging, ensuring newest data is processed last
+- **Field normalization**: Maps `tweet` → `tweets` for format consistency
+- **Chronological processing**: Preserves temporal relationships across archives
 
 ### 3. Deduplication Engine
 
-Uses composite key matching to identify duplicates:
+Uses unique identifier matching to identify duplicates:
 
 **Tweet deduplication:**
 ```python
-duplicate_key = (tweet_id, creation_date, full_text_hash)
+duplicate_key = tweet['id_str']  # Twitter's unique tweet ID
 ```
 
 **Message deduplication:**
 ```python
-duplicate_key = (conversation_id, timestamp, text_hash, sender_id)
+duplicate_key = dmConversation['conversationId']  # Unique conversation ID
 ```
 
 **Social graph deduplication:**
 ```python
-duplicate_key = (user_id, account_handle)  # for follows/followers
+duplicate_key = accountId  # for followers/following
+```
+
+**Like deduplication:**
+```python
+duplicate_key = like['tweetId']  # ID of the liked tweet
+```
+
+**Singleton data handling:**
+For data types that should only have one entry (profile, account, ageinfo, accountTimezone, accountCreationIp), only the newest entry is kept:
+```python
+# Since archives are sorted oldest-to-newest, keep the last entry
+singleton_data[data_type] = [entries[-1]]
 ```
 
 ### 4. Media File Consolidation
@@ -100,6 +115,13 @@ Critical manifest entries:
   },
   "tweetsMedia": {
     "mediaDirectory": "data/tweets_media"  // Required for viewer
+  },
+  "profile": {
+    "files": [{"fileName": "data/profile.js", "globalName": "YTD.profile.part0"}],
+    "mediaDirectory": "data/profile_media"
+  },
+  "profileMedia": {
+    "mediaDirectory": "data/profile_media"  // Required for profile picture display
   }
 }
 ```
@@ -129,9 +151,10 @@ window.YTD.tweets.part0 = [
 ## Performance Characteristics
 
 ### Memory Usage
-- **Streaming processing**: Handles archives larger than available RAM
-- **Incremental deduplication**: O(n) memory complexity for duplicate detection
-- **Chunked file operations**: Processes media files in batches
+- **In-memory processing**: JSON data files are loaded fully into memory for processing
+- **Hash-based deduplication**: O(n) memory complexity for storing seen keys during duplicate detection
+- **Sequential file operations**: Media files are copied one at a time to minimize memory overhead
+- **Recommendation**: For very large archives (100K+ tweets), ensure adequate RAM (8GB+)
 
 ### Time Complexity
 - **Data merging**: O(n × m) where n = records, m = archives
