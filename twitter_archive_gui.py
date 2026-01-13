@@ -272,48 +272,6 @@ class TwitterArchiveGUI:
         thread.daemon = True
         thread.start()
 
-    def show_help(self):
-        """Show help popup window"""
-        help_window = tk.Toplevel(self.root)
-        help_window.title("Twitter Archive Merger - Help")
-        help_window.geometry("700x500")
-        help_window.resizable(True, True)
-
-        # Create main frame
-        main_frame = ttk.Frame(help_window, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Add title
-        title_label = ttk.Label(main_frame, text="Twitter Archive Merger - Help",
-                                font=("Arial", 14, "bold"))
-        title_label.pack(pady=(0, 10))
-
-        # Create scrolled text widget for help content
-        help_text = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, width=70, height=25)
-        help_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        # Load help content from file
-        try:
-            help_file = Path(__file__).parent / "help_text.md"
-            with open(help_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            help_text.insert(tk.END, content)
-        except FileNotFoundError:
-            help_text.insert(tk.END, "Help file not found. Please ensure 'help_text.md' is in the same directory as this program.")
-        except Exception as e:
-            help_text.insert(tk.END, f"Error loading help content: {str(e)}")
-
-        # Make text read-only
-        help_text.configure(state=tk.DISABLED)
-
-        # Add close button
-        close_button = ttk.Button(main_frame, text="Close", command=help_window.destroy)
-        close_button.pack(pady=(5, 0))
-
-        # Center the window
-        help_window.transient(self.root)
-        help_window.grab_set()
-
     def open_output(self):
         """Open output folder"""
         output_path = Path(self.output_var.get())

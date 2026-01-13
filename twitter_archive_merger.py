@@ -179,6 +179,12 @@ class TwitterArchiveMerger:
         """Merge all data files from all archives"""
         self.log_progress("📁 Merging data files...")
 
+        # Sort archives by generation date (oldest first) so newest data is processed last
+        self.source_archives.sort(
+            key=lambda x: x['manifest']['archiveInfo']['generationDate']
+        )
+        self.log_progress(f"   Processing archives from oldest to newest...")
+
         # Handle format compatibility - map old field names to new ones
         field_mappings = {
             'tweet': 'tweets',  # Old format used 'tweet', new uses 'tweets'
@@ -250,6 +256,15 @@ class TwitterArchiveMerger:
                 removed = original_count - len(deduplicated)
                 self.log_progress(f"   {data_type}: removed {removed} duplicates")
                 self.merged_data[data_type] = deduplicated
+
+        # Special handling for singleton data types - keep only the latest entry
+        singleton_types = ['profile', 'account', 'ageinfo', 'accountTimezone', 'accountCreationIp']
+        for data_type in singleton_types:
+            if data_type in self.merged_data and len(self.merged_data[data_type]) > 1:
+                original_count = len(self.merged_data[data_type])
+                # Keep only the last entry (from the newest archive)
+                self.merged_data[data_type] = [self.merged_data[data_type][-1]]
+                self.log_progress(f"   {data_type}: kept latest entry (removed {original_count - 1} older entries)")
 
     def copy_media_files(self):
         """Copy media files with deduplication"""
@@ -379,10 +394,20 @@ class TwitterArchiveMerger:
                 data_types[data_type]["mediaDirectory"] = "data/tweets_media"
                 self.log_progress(f"   ✅ Added tweets media directory")
 
+            # Add media directory for profile if it exists
+            if data_type == 'profile' and (self.output_path / 'data/profile_media').exists():
+                data_types[data_type]["mediaDirectory"] = "data/profile_media"
+                self.log_progress(f"   ✅ Added profile media directory")
+
         # Add tweetsMedia entry
         if (self.output_path / 'data/tweets_media').exists():
             data_types['tweetsMedia'] = {"mediaDirectory": "data/tweets_media"}
             self.log_progress(f"   ✅ Added tweetsMedia entry")
+
+        # Add profileMedia entry
+        if (self.output_path / 'data/profile_media').exists():
+            data_types['profileMedia'] = {"mediaDirectory": "data/profile_media"}
+            self.log_progress(f"   ✅ Added profileMedia entry")
 
         manifest = {
             "userInfo": user_info,
