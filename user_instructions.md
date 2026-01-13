@@ -6,10 +6,11 @@ The Twitter Archive Merger combines multiple Twitter data exports into one compl
 
 **Key Benefits:**
 - ✅ Combines multiple Twitter archives into one
-- ✅ Removes duplicate tweets and data automatically  
+- ✅ Removes duplicate tweets and data automatically
 - ✅ Preserves all images, videos, and media files
 - ✅ Creates a working archive you can browse in your web browser
 - ✅ No data sent to the internet - everything stays on your computer
+- ✅ Supports ALL archive formats (2017-2024+)
 
 ## Prerequisites
 
@@ -161,6 +162,18 @@ The tool combines these data types:
 - **All images and videos**
 - **Account settings and preferences**
 
+## Supported Archive Formats
+
+The tool works with ALL Twitter archive formats:
+
+| Archive Year | Format | Status |
+|-------------|--------|--------|
+| 2017-2018 | Legacy (`Grailbird.data.*`) | ✅ Supported |
+| 2019-2022 | Modern (`YTD.tweet.*`) | ✅ Supported |
+| 2023-2024+ | Modern (`YTD.tweets.*`) | ✅ Supported |
+
+**You can mix and match any combination** - the tool automatically detects and converts between formats. For example, merging a 2018 archive with a 2022 archive works seamlessly.
+
 ## Troubleshooting
 
 ### Common Issues
@@ -214,12 +227,15 @@ merged_archive/
 ├── Your archive.html          # Open this in browser
 ├── data/
 │   ├── manifest.js           # Archive configuration
-│   ├── tweets.js             # All your tweets
-│   ├── likes.js              # All your likes
+│   ├── tweet.js              # Tweets (2022 format)
+│   ├── tweets.js             # Tweets (2024 format)
+│   ├── like.js               # All your likes
 │   ├── tweets_media/         # All tweet images/videos
 │   └── [other data files]
 └── assets/                   # Viewer application files
 ```
+
+*Note: The tool outputs tweets in both old (`tweet.js`) and new (`tweets.js`) formats for maximum viewer compatibility.*
 
 ## Backup Recommendations
 

@@ -1,22 +1,22 @@
 # Twitter Archive Merger
 
-A Python tool that combines multiple Twitter data exports into a single, unified archive with full media preservation and browser compatibility.
+A Python tool that combines multiple X / Twitter data exports into a single, unified archive with full media preservation and browser compatibility.
 
 ## What It Does
 
-If you've downloaded your Twitter data multiple times over the years, this tool merges them into one complete archive containing all your tweets, likes, DMs, followers, and media files.
+If you've downloaded your X / Twitter data multiple times over the years, this tool can merge them into one complete archive containing all your tweets, likes, DMs, followers, and media files.
 
 ## Key Features
 
-- **Combines multiple archives** into one unified export
+- **Combines multiple archives** into one unified export including Tweet archives from 2016 onwards!
 - **Removes duplicates** automatically across all data types
-- **Preserves all media** (images, videos, attachments)
-- **Maintains viewer compatibility** - works with Twitter's browser interface
+- **Preserves all media** (images, videos, attachments) present in the archives
+- **Maintains viewer compatibility** - works with X / Twitter's browser interface
 - **Local processing only** - no data leaves your computer
 
 ## How It Works
 
-1. **Load** multiple Twitter archive folders
+1. **Load** multiple X /Twitter archive folders
 2. **Merge** all data files (tweets, likes, DMs, etc.)
 3. **Deduplicate** entries using smart matching
 4. **Consolidate** media files with collision handling
